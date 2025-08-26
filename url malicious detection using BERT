@@ -1,0 +1,92 @@
+import torch 
+from transformers import BertTokenizer, BertForSequenceClassification, Trainer, 
+TrainingArguments 
+import pandas as pd 
+from sklearn.model_selection import train_test_split 
+import logging 
+import os 
+ 
+# === Setup logging for debug output === 
+logging.basicConfig(level=logging.INFO) 
+ 
+# === Load and preprocess the dataset === 
+df = pd.read_csv("./data/labeled_url_data.csv") 
+ 
+# Make sure 'label' is int and 'URL' is string 
+df["label"] = df["label"].astype(int) 
+df["URL"] = df["URL"].astype(str) 
+ 
+# Preprocess URLs for better tokenization 
+def preprocess_url(url): 
+    url = url.lower() 
+    return url.replace("/", " / ").replace(".", " . ").replace("-", " - ") 
+ 
+    
+df["clean_url"] = df["URL"].apply(preprocess_url) 
+ 
+# === Split into train/test === 
+X_train, X_test, y_train, y_test = train_test_split(df["clean_url"], df["label"], test_size=0.2, 
+random_state=42) 
+ 
+# === Load tokenizer and model === 
+tokenizer = BertTokenizer.from_pretrained("bert-base-uncased") 
+model = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=2) 
+ 
+# === Tokenize the text === 
+train_encodings = tokenizer(list(X_train), truncation=True, padding=True, max_length=128) 
+test_encodings = tokenizer(list(X_test), truncation=True, padding=True, max_length=128) 
+ 
+# === Dataset class === 
+class URLDataset(torch.utils.data.Dataset): 
+    def __init__(self, encodings, labels): 
+        self.encodings = encodings 
+        self.labels = list(labels) 
+ 
+    def __getitem__(self, idx): 
+        item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()} 
+        item["labels"] = torch.tensor(self.labels[idx]) 
+        return item 
+ 
+    def __len__(self): 
+        return len(self.labels) 
+ 
+train_dataset = URLDataset(train_encodings, y_train) 
+test_dataset = URLDataset(test_encodings, y_test) 
+ 
+print(f"Training samples: {len(train_dataset)}") 
+print(f"Testing samples: {len(test_dataset)}") 
+ 
+# === Training arguments === 
+training_args = TrainingArguments( 
+    output_dir="./models/url_bert",         # safe local relative path 
+    num_train_epochs=5, 
+    per_device_train_batch_size=8, 
+    evaluation_strategy="epoch", 
+    save_total_limit=1, 
+    learning_rate=2e-5, 
+    weight_decay=0.01, 
+    logging_dir="./logs",                   # enable logging 
+    logging_steps=10, 
+    logging_strategy="steps", 
+    
+ 
+    
+ report_to="none"                        # disable W&B etc. 
+) 
+ 
+# === Trainer === 
+trainer = Trainer( 
+    model=model, 
+    args=training_args, 
+    train_dataset=train_dataset, 
+    eval_dataset=test_dataset 
+) 
+ 
+# === Train model === 
+trainer.train() 
+ 
+# === Save model === 
+os.makedirs("./models", exist_ok=True) 
+MODEL_PATH = "./models/url_bert_model.pt" 
+torch.save(model.state_dict(), MODEL_PATH) 
+print(f" URL model saved at: {MODEL_PATH}") 
